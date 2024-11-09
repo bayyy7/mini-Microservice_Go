@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"mini-microservice_go/auth/model"
-	"mini-microservice_go/auth/utils"
+	"auth/model"
+	"auth/utils"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -122,21 +122,7 @@ func (a *authImplement) AuthSignUp(ctx *gin.Context) {
 		Password: string(hashPassword),
 	}
 
-	newAccount := model.Account{
-		Name:    payload.Name,
-		Balance: 0,
-	}
-
 	if err := tx.Create(&newUser).Error; err != nil {
-		tx.Rollback()
-		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	newAccount.AccountID = newUser.AccountID
-	if err := tx.Create(&newAccount).Error; err != nil {
 		tx.Rollback()
 		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),

@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"mini-microservice_go/account/model"
+	"account/model"
 	"net/http"
 
 	"github.com/gin-gonic/gin"

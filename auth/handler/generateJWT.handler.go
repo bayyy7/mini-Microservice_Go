@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"mini-microservice_go/auth/model"
+	"auth/model"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
