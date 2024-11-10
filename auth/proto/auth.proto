@@ -4,11 +4,9 @@ package auth;
 
 option go_package = "./proto;auth";
 
-import "google/protobuf/empty.proto";
-
 service Auth {
     rpc Login(AuthLoginRequest) returns (AuthLoginResponse) {}
-    rpc Signup(AuthSignupRequest) returns (google.protobuf.Empty) {}
+    rpc Signup(AuthSignupRequest) returns (AuthSignupResponse) {}
     rpc Validate(AuthValidateRequest) returns (AuthValidateResponse) {}
 }
 
@@ -32,7 +30,10 @@ message AuthValidateResponse {
 }
 
 message AuthSignupRequest {
+    string username = 1;
+    string password = 2;
+}
+
+message AuthSignupResponse {
     int64 account_id = 1;
-    string username = 2;
-    string password = 3;
 }

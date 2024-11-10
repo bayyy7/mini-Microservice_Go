@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"auth"
+
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -16,14 +18,14 @@ type AuthInterface interface {
 }
 
 type authImplement struct {
-	db     *gorm.DB
-	jwtKey []byte
+	db         *gorm.DB
+	authClient auth.authClient
 }
 
-func NewAuth(db *gorm.DB, jwtKey []byte) AuthInterface {
+func NewAuth(db *gorm.DB, authClient auth.authClient) AuthInterface {
 	return &authImplement{
 		db,
-		jwtKey,
+		authClient,
 	}
 }
 
