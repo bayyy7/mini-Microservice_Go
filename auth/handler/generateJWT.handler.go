@@ -16,7 +16,7 @@ func (a *authImplement) GenerateJWT(auth *model.Auth) (string, error) {
 	claims["username"] = auth.Username
 	claims["exp"] = time.Now().Add(time.Hour * 2).Unix()
 
-	tokenString, err := token.SignedString(a.jwtKey)
+	tokenString, err := token.SignedString(a.signingKey)
 	if err != nil {
 		return "", err
 	}

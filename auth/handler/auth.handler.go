@@ -2,96 +2,87 @@ package handler
 
 import (
 	"auth/model"
-	"auth/utils"
+	pb "auth/proto"
+	"context"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 )
 
-type AuthInterface interface {
-	AuthLogin(*gin.Context)
-	AuthSignUp(*gin.Context)
-}
-
 type authImplement struct {
-	db     *gorm.DB
-	jwtKey []byte
+	pb.UnimplementedAuthServer
+	db         *gorm.DB
+	signingKey []byte
 }
 
-func NewAuth(db *gorm.DB, jwtKey []byte) AuthInterface {
+func NewAuth(db *gorm.DB, signingKey []byte) pb.AuthServer {
 	return &authImplement{
-		db,
-		jwtKey,
+		db:         db,
+		signingKey: signingKey,
 	}
 }
 
-type authPayload struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Name     string `json:"name" binding:"required"`
-}
-
-func (a *authImplement) AuthLogin(ctx *gin.Context) {
-	payload := authPayload{}
-
-	if err := ctx.ShouldBindJSON(&payload); err != nil {
-		ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
+func (a *authImplement) Login(ctx context.Context, req *pb.AuthLoginRequest) (*pb.AuthLoginResponse, error) {
 	auth := model.Auth{}
-	if err := a.db.Where("username = ?", payload.Username).First(&auth).Error; err != nil {
+	if err := a.db.Where("username = ?", req.Username).
+		First(&auth).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "Username not found",
-			})
-			return
+			return nil, status.Error(codes.Unauthenticated, "Login not valid")
 		}
-		return
+
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(auth.Password), []byte(payload.Password)); err != nil {
-		ctx.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-			"error": "Wrong password",
-		})
-		return
+	if err := bcrypt.CompareHashAndPassword([]byte(auth.Password), []byte(req.Password)); err != nil {
+		return nil, status.Error(codes.Unauthenticated, "Login not valid")
 	}
 
+	// Login valid, create token
 	token, err := a.GenerateJWT(&auth)
 	if err != nil {
-		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error": err,
-		})
-		return
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
-		"message": "success",
-		"token":   token,
-	})
+	// Success Response
+	return &pb.AuthLoginResponse{
+		Token: token,
+	}, nil
 }
 
-func (a *authImplement) AuthSignUp(ctx *gin.Context) {
-	payload := authPayload{}
-
-	if err := ctx.ShouldBindJSON(&payload); err != nil {
-		ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
-		return
+func (a *authImplement) Validate(ctx context.Context, req *pb.AuthValidateRequest) (*pb.AuthValidateResponse, error) {
+	token, err := jwt.Parse(req.Token, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, http.ErrAbortHandler
+		}
+		return []byte(a.signingKey), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, status.Error(codes.Unauthenticated, "Unauthenticated")
 	}
 
-	if !utils.CharacterCheck(payload.Username) && !utils.CharacterCheck(payload.Password) {
-		ctx.JSON(http.StatusUnauthorized, gin.H{
-			"message": "Username or Password must be Alphanumeric",
-		})
-		return
+	response := &pb.AuthValidateResponse{}
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		if authID, ok := claims["auth_id"].(float64); ok {
+			response.AuthId = int64(authID)
+		}
+		if accountID, ok := claims["account_id"].(float64); ok {
+			response.AccountId = int64(accountID)
+		}
+		if username, ok := claims["username"].(string); ok {
+			response.Username = username
+		}
+	} else {
+		return nil, status.Error(codes.Unauthenticated, "Unauthenticated")
 	}
 
+	return response, nil
+}
+
+func (a *authImplement) Signup(ctx context.Context, req *pb.AuthSignupRequest) (*pb.AuthSignupResponse, error) {
 	tx := a.db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -100,46 +91,33 @@ func (a *authImplement) AuthSignUp(ctx *gin.Context) {
 	}()
 
 	existingUser := model.Auth{}
-	if result := tx.Where("username = ?", payload.Username).First(&existingUser); result.RowsAffected > 0 {
+	if result := tx.Where("username = ?", req.Username).First(&existingUser); result.RowsAffected > 0 {
 		tx.Rollback()
-		ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{
-			"error": "username already exist",
-		})
-		return
+		return nil, status.Error(codes.AlreadyExists, "Username already exist")
 	}
 
-	hashPassword, err := bcrypt.GenerateFromPassword([]byte(payload.Password), bcrypt.DefaultCost)
+	hashPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		tx.Rollback()
-		ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error": err,
-		})
-		return
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	newUser := model.Auth{
-		Username: payload.Username,
+	model := model.Auth{
+		Username: req.Username,
 		Password: string(hashPassword),
 	}
 
-	if err := tx.Create(&newUser).Error; err != nil {
+	if err := tx.Create(&model).Error; err != nil {
 		tx.Rollback()
-		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
+		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		tx.Rollback()
-		ctx.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
+		return nil, status.Error(codes.Unknown, err.Error())
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
-		"message":  "User register successfully",
-		"username": payload.Username,
-	})
+	return &pb.AuthSignupResponse{
+		AccountId: int64(model.AccountID),
+	}, nil
 }
